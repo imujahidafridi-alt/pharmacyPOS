@@ -1,0 +1,128 @@
+from core.database import get_db
+from core.models import Medicine, Inventory, Sale, SaleItem
+from sqlalchemy import or_, func
+import datetime
+
+class POSController:
+    """Handles Point of Sale logic."""
+    
+    def search_medicines(self, query):
+        db = next(get_db())
+        search_term = f"%{query}%"
+        
+        results = db.query(
+            Medicine, 
+            func.coalesce(func.sum(Inventory.quantity), 0).label('total_stock')
+        ).outerjoin(
+            Inventory, Medicine.id == Inventory.medicine_id
+        ).filter(
+            or_(Medicine.name.ilike(search_term), Medicine.generic_name.ilike(search_term))
+        ).group_by(Medicine.id).all()
+        
+        return [{
+            "id": m.id, 
+            "name": m.name, 
+            "generic_name": m.generic_name, 
+            "sale_price": m.sale_price, 
+            "is_discountable": getattr(m, 'is_discountable', 1),
+            "stock": stock
+        } for m, stock in results]
+    
+    def get_stock_for_medicine(self, medicine_id):
+        db = next(get_db())
+        total_qty = db.query(func.sum(Inventory.quantity)).filter(Inventory.medicine_id == medicine_id).scalar()
+        return total_qty if total_qty else 0
+
+    def process_sale(self, cart_items, discount, payment_method, customer_id=None, amount_paid=0.0, user_id=1):
+        """
+        Processes a sale.
+        cart_items is a list of dicts: {'medicine_id': int, 'quantity': int, 'price': float}
+        """
+        if not cart_items:
+            return False, "Cart is empty."
+            
+        if payment_method == "Credit (Khata)" and not customer_id:
+            return False, "A Customer must be selected for Credit (Khata) sales."
+            
+        total_amount = sum(item['price'] * item['quantity'] for item in cart_items)
+        date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        db = next(get_db())
+        try:
+            sale = Sale(date=date_str, total_amount=total_amount, discount=discount, payment_method=payment_method, customer_id=customer_id, amount_paid=amount_paid)
+            db.add(sale)
+            db.flush()
+            
+            for item in cart_items:
+                med_id = item['medicine_id']
+                qty = item['quantity']
+                price = item['price']
+                
+                sale_item = SaleItem(sale_id=sale.id, medicine_id=med_id, quantity=qty, price=price)
+                db.add(sale_item)
+                
+                # Use with_for_update() to lock these rows during the transaction to prevent concurrent multi-PC race conditions.
+                batches = db.query(Inventory).filter(
+                    Inventory.medicine_id == med_id, 
+                    Inventory.quantity > 0
+                ).order_by(Inventory.expiry_date.asc()).with_for_update().all()
+                
+                qty_to_deduct = qty
+                for batch in batches:
+                    if qty_to_deduct <= 0:
+                        break
+                    
+                    if batch.quantity >= qty_to_deduct:
+                        batch.quantity -= qty_to_deduct
+                        qty_to_deduct = 0
+                    else:
+                        qty_to_deduct -= batch.quantity
+                        batch.quantity = 0
+                        
+                if qty_to_deduct > 0:
+                    db.rollback()
+                    return False, f"Not enough stock for medicine ID {med_id}. Short by {qty_to_deduct}."
+
+            # Khata logic
+            if customer_id:
+                from core.models import CustomerLedger
+                # Add Sale debit
+                sale_entry = CustomerLedger(
+                    customer_id=customer_id,
+                    date=date_str,
+                    transaction_type='SALE',
+                    amount=total_amount - discount,
+                    sale_id=sale.id,
+                    description=f"Sale #{sale.id}"
+                )
+                db.add(sale_entry)
+                
+                # Add Payment credit if amount_paid > 0
+                if amount_paid > 0:
+                    payment_entry = CustomerLedger(
+                        customer_id=customer_id,
+                        date=date_str,
+                        transaction_type='PAYMENT',
+                        amount=-amount_paid,
+                        sale_id=sale.id,
+                        description=f"Payment for Sale #{sale.id}"
+                    )
+                    db.add(payment_entry)
+
+            db.commit()
+            
+            from controllers.audit_controller import AuditController
+            AuditController.log_action(user_id, "SALE", f"Sale #{sale.id} processed for Rs. {total_amount-discount}")
+            
+            # Print receipt
+            try:
+                from core.printer import ReceiptPrinter
+                printer = ReceiptPrinter()
+                printer.print_receipt(cart_items, total_amount, discount, payment_method, sale.id)
+            except Exception as e:
+                print(f"Printer error: {e}")
+                
+            return True, "Sale completed successfully."
+        except Exception as e:
+            db.rollback()
+            return False, f"Error processing sale: {e}"
