@@ -1,7 +1,7 @@
 ## Pharmacy POS System (Pakistan)
 
 **Software Requirements Specification (SRS) + Roadmap**
-**Tech Stack:** Python + PyQt (Desktop UI) + SQLite (Local DB)
+**Tech Stack:** Python + PyQt (Desktop UI) + PostgreSQL (DB)
 
 ---
 
@@ -19,7 +19,7 @@ The system will:
 * Process retail sales (POS billing)
 * Handle customer and supplier records
 * Generate reports (sales, stock, profit)
-* Support offline-first usage (SQLite)
+* Support offline-first usage (PostgreSQL)
 
 ## 1.3 Users
 
@@ -52,7 +52,7 @@ Standalone desktop application:
 
 * Must run on low-spec PCs (2–4 GB RAM)
 * No internet dependency
-* SQLite DB (single-user optimized)
+* PostgreSQL DB
 
 ---
 
@@ -210,11 +210,11 @@ Standalone desktop application:
 
 * UI Layer → PyQt
 * Logic Layer → Python services
-* Data Layer → SQLite
+* Data Layer → PostgreSQL
 
 ---
 
-# 6. Database Design (SQLite)
+# 6. Database Design (PostgreSQL)
 
 ## Tables
 
@@ -303,7 +303,7 @@ Standalone desktop application:
 ## Phase 1: Foundation (Week 1–2)
 
 * Project setup
-* SQLite schema
+* PostgreSQL schema
 * Basic PyQt layout
 * Authentication system
 
@@ -357,7 +357,7 @@ Standalone desktop application:
 
 # 10. Risks
 
-* Data corruption (SQLite misuse)
+* Data corruption (DB misuse)
 * Poor UI adoption
 * Hardware compatibility issues
 

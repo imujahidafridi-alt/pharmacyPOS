@@ -4,6 +4,22 @@ import datetime
 
 Base = declarative_base()
 
+class Unit(Base):
+    __tablename__ = 'units'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, unique=True, nullable=False) # Tablet, Strip, Box, etc.
+
+class UnitConversion(Base):
+    __tablename__ = 'unit_conversions'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    medicine_id = Column(Integer, ForeignKey('medicines.id'), nullable=False)
+    unit_id = Column(Integer, ForeignKey('units.id'), nullable=False)
+    conversion_to_base = Column(Integer, nullable=False) # e.g. 1 strip = 10 base units
+
+    # Relationships
+    medicine = relationship("Medicine", back_populates="conversions")
+    unit = relationship("Unit")
+
 class User(Base):
     __tablename__ = 'users'
 
@@ -28,14 +44,23 @@ class Medicine(Base):
     __tablename__ = 'medicines'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    barcode = Column(String, unique=True, nullable=True)
     name = Column(String, nullable=False)
     generic_name = Column(String)
     category = Column(String)
-    sale_price = Column(Float, nullable=False)
-    units_per_box = Column(Integer, default=1)
+    manufacturer = Column(String)
+    mrp = Column(Float, nullable=False, default=0.0) # Printed Retail Price
+    sale_price = Column(Float, nullable=False) # Default Base Sale Price
     is_discountable = Column(Integer, default=1) # 1 for True, 0 for False (SQLite compatibility)
+    base_unit_id = Column(Integer, ForeignKey('units.id'))
+    min_stock_level = Column(Integer, default=10)
+    location = Column(String)
+    status = Column(String, default='Active')
+    description = Column(String)
 
     # Relationships
+    base_unit = relationship("Unit")
+    conversions = relationship("UnitConversion", back_populates="medicine", cascade="all, delete-orphan")
     inventory = relationship("Inventory", back_populates="medicine")
     sale_items = relationship("SaleItem", back_populates="medicine")
     purchase_items = relationship("PurchaseItem", back_populates="medicine")
@@ -87,8 +112,10 @@ class Inventory(Base):
     medicine_id = Column(Integer, ForeignKey('medicines.id'), nullable=False)
     batch_no = Column(String, nullable=False)
     expiry_date = Column(String, nullable=False)
-    quantity = Column(Integer, nullable=False, default=0)
-    purchase_price = Column(Float, nullable=False)
+    quantity = Column(Integer, nullable=False, default=0) # ALWAYS in base units
+    purchase_price = Column(Float, nullable=False) # Per Base Unit
+    mrp = Column(Float, nullable=False, default=0.0) # Per Base Unit (Override per batch)
+    sale_price = Column(Float, nullable=False) # Per Base Unit (Override per batch)
     supplier_id = Column(Integer, ForeignKey('suppliers.id'))
 
     # Relationships
@@ -119,12 +146,15 @@ class SaleItem(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     sale_id = Column(Integer, ForeignKey('sales.id'), nullable=False)
     medicine_id = Column(Integer, ForeignKey('medicines.id'), nullable=False)
-    quantity = Column(Integer, nullable=False)
-    price = Column(Float, nullable=False)
+    unit_id = Column(Integer, ForeignKey('units.id'), nullable=True) # The unit selected by the user
+    conversion_to_base = Column(Integer, nullable=False, default=1) # Used to trace original quantity context
+    quantity = Column(Integer, nullable=False) # Quantity IN SELECTED UNIT
+    price = Column(Float, nullable=False) # Price IN SELECTED UNIT
 
     # Relationships
     sale = relationship("Sale", back_populates="items")
     medicine = relationship("Medicine", back_populates="sale_items")
+    unit = relationship("Unit")
 
 class Purchase(Base):
     __tablename__ = 'purchases'
@@ -144,11 +174,14 @@ class PurchaseItem(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     purchase_id = Column(Integer, ForeignKey('purchases.id'), nullable=False)
     medicine_id = Column(Integer, ForeignKey('medicines.id'), nullable=False)
+    unit_id = Column(Integer, ForeignKey('units.id'), nullable=True)
+    conversion_to_base = Column(Integer, nullable=False, default=1)
     batch_no = Column(String, nullable=False)
     expiry_date = Column(String, nullable=False)
-    quantity = Column(Integer, nullable=False)
-    purchase_price = Column(Float, nullable=False)
+    quantity = Column(Integer, nullable=False) # Quantity IN SELECTED UNIT
+    purchase_price = Column(Float, nullable=False) # Price IN SELECTED UNIT
 
     # Relationships
     purchase = relationship("Purchase", back_populates="items")
     medicine = relationship("Medicine", back_populates="purchase_items")
+    unit = relationship("Unit")

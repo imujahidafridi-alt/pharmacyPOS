@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, 
-    QTableWidgetItem, QHeaderView, QLabel, QLineEdit, QMessageBox, QFormLayout, QDialog, QFileDialog, QCheckBox
+    QTableWidgetItem, QHeaderView, QLabel, QLineEdit, QMessageBox, QFormLayout, QDialog, QFileDialog, QCheckBox, QComboBox, QGridLayout, QGroupBox
 )
 from PyQt6.QtCore import Qt
 from controllers.inventory_controller import InventoryController
@@ -9,46 +9,188 @@ class AddMedicineDialog(QDialog):
     def __init__(self, controller: InventoryController, parent=None):
         super().__init__(parent)
         self.controller = controller
-        self.setWindowTitle("Add New Medicine")
-        self.resize(300, 250)
+        self.setWindowTitle("Add New Item (Inventory & Medicine)")
+        self.resize(700, 500)
         
-        layout = QFormLayout(self)
+        main_layout = QVBoxLayout(self)
+        
+        # --- Section 1: General Info ---
+        gen_group = QGroupBox("General Information")
+        gen_layout = QGridLayout()
+        
+        self.barcode_input = QLineEdit()
+        self.barcode_input.setPlaceholderText("Scan Barcode or type...")
         
         self.name_input = QLineEdit()
         self.generic_input = QLineEdit()
-        self.category_input = QLineEdit()
-        self.price_input = QLineEdit()
-        self.units_input = QLineEdit("1")
         
-        layout.addRow("Name *:", self.name_input)
-        layout.addRow("Generic Name:", self.generic_input)
-        layout.addRow("Category:", self.category_input)
-        layout.addRow("Sale Price *:", self.price_input)
-        layout.addRow("Units per Box:", self.units_input)
+        self.category_combo = QComboBox()
+        categories = [
+            "Tablets / Capsules", 
+            "Syrups / Suspensions", 
+            "Injections / Drops",
+            "Creams / Ointments",
+            "Inhalers / Sprays",
+            "Surgical & Disposables",
+            "Cosmetics / Skincare",
+            "Baby Care / Diapers",
+            "Nutraceuticals / Vitamins",
+            "OTC (Over The Counter)",
+            "Herbal / Homeopathic",
+            "Consumer Goods / General",
+            "Medicine"
+        ]
+        self.category_combo.addItems(categories)
+        self.category_combo.setEditable(True)
         
-        self.discountable_cb = QCheckBox("Is Discountable?")
-        self.discountable_cb.setChecked(True)
-        layout.addRow(self.discountable_cb)
+        self.manufacturer_input = QLineEdit()
+        self.location_input = QLineEdit()
+        self.location_input.setPlaceholderText("e.g. A-12")
         
+        gen_layout.addWidget(QLabel("Barcode:"), 0, 0)
+        gen_layout.addWidget(self.barcode_input, 0, 1)
+        gen_layout.addWidget(QLabel("Item Name *:"), 0, 2)
+        gen_layout.addWidget(self.name_input, 0, 3)
+        
+        gen_layout.addWidget(QLabel("Generic Name:"), 1, 0)
+        gen_layout.addWidget(self.generic_input, 1, 1)
+        gen_layout.addWidget(QLabel("Category:"), 1, 2)
+        gen_layout.addWidget(self.category_combo, 1, 3)
+        
+        gen_layout.addWidget(QLabel("Manufacturer:"), 2, 0)
+        gen_layout.addWidget(self.manufacturer_input, 2, 1)
+        gen_layout.addWidget(QLabel("Shelf Location:"), 2, 2)
+        gen_layout.addWidget(self.location_input, 2, 3)
+        
+        gen_group.setLayout(gen_layout)
+        main_layout.addWidget(gen_group)
+        
+        # --- Section 2: Units & Pricing ---
+        price_group = QGroupBox("Units & Pricing")
+        price_layout = QGridLayout()
+        
+        self.units = self.controller.get_all_units()
+        
+        self.base_unit_combo = QComboBox()
+        for u in self.units:
+            self.base_unit_combo.addItem(u['name'], u['id'])
+            
+        self.pack_unit_combo = QComboBox()
+        for u in self.units:
+            self.pack_unit_combo.addItem(u['name'], u['id'])
+            
+        self.pack_conversion_input = QLineEdit("1")
+        self.pack_conversion_input.setPlaceholderText("Base units per Pack")
+        
+        self.sale_price_input = QLineEdit()
+        self.sale_price_input.setPlaceholderText("Sale Price per BASE unit")
+        
+        self.purchase_price_input = QLineEdit()
+        self.purchase_price_input.setPlaceholderText("Purchase Price per PACK")
+        
+        price_layout.addWidget(QLabel("Base Unit *:"), 0, 0)
+        price_layout.addWidget(self.base_unit_combo, 0, 1)
+        price_layout.addWidget(QLabel("Sale Price (Per Base Unit) *:"), 0, 2)
+        price_layout.addWidget(self.sale_price_input, 0, 3)
+        
+        price_layout.addWidget(QLabel("Pack Unit (e.g. Box):"), 1, 0)
+        price_layout.addWidget(self.pack_unit_combo, 1, 1)
+        price_layout.addWidget(QLabel("Units per Pack:"), 1, 2)
+        price_layout.addWidget(self.pack_conversion_input, 1, 3)
+        
+        price_layout.addWidget(QLabel("Purchase Price (Per Pack):"), 2, 0)
+        price_layout.addWidget(self.purchase_price_input, 2, 1)
+        
+        price_group.setLayout(price_layout)
+        main_layout.addWidget(price_group)
+        
+        # --- Section 3: Stock Details ---
+        stock_group = QGroupBox("Initial Stock Details")
+        stock_layout = QGridLayout()
+        
+        self.current_stock_input = QLineEdit("0")
+        self.current_stock_input.setPlaceholderText("Stock in BASE units")
+        
+        self.min_stock_input = QLineEdit("10")
+        
+        self.batch_input = QLineEdit()
+        self.expiry_input = QLineEdit()
+        self.expiry_input.setPlaceholderText("YYYY-MM-DD")
+        
+        stock_layout.addWidget(QLabel("Current Stock (Base Units):"), 0, 0)
+        stock_layout.addWidget(self.current_stock_input, 0, 1)
+        stock_layout.addWidget(QLabel("Minimum Stock Level:"), 0, 2)
+        stock_layout.addWidget(self.min_stock_input, 0, 3)
+        
+        stock_layout.addWidget(QLabel("Batch No:"), 1, 0)
+        stock_layout.addWidget(self.batch_input, 1, 1)
+        stock_layout.addWidget(QLabel("Expiry Date:"), 1, 2)
+        stock_layout.addWidget(self.expiry_input, 1, 3)
+        
+        stock_group.setLayout(stock_layout)
+        main_layout.addWidget(stock_group)
+        
+        # Description
+        desc_layout = QHBoxLayout()
+        self.desc_input = QLineEdit()
+        self.desc_input.setPlaceholderText("Optional description...")
+        desc_layout.addWidget(QLabel("Description:"))
+        desc_layout.addWidget(self.desc_input)
+        main_layout.addLayout(desc_layout)
+        
+        # Buttons
         btn_layout = QHBoxLayout()
-        save_btn = QPushButton("Save")
+        btn_layout.addStretch()
+        save_btn = QPushButton("Save Item (Enter)")
+        save_btn.setStyleSheet("background-color: #2980b9; color: white; padding: 8px 15px; font-weight: bold;")
         save_btn.clicked.connect(self.save)
+        
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         
-        btn_layout.addWidget(save_btn)
         btn_layout.addWidget(cancel_btn)
-        layout.addRow(btn_layout)
+        btn_layout.addWidget(save_btn)
+        main_layout.addLayout(btn_layout)
+        
+        # Set Tab Order manually for perfect UX
+        QWidget.setTabOrder(self.barcode_input, self.name_input)
+        QWidget.setTabOrder(self.name_input, self.generic_input)
+        QWidget.setTabOrder(self.generic_input, self.category_combo)
+        QWidget.setTabOrder(self.category_combo, self.manufacturer_input)
+        QWidget.setTabOrder(self.manufacturer_input, self.location_input)
+        QWidget.setTabOrder(self.location_input, self.base_unit_combo)
+        QWidget.setTabOrder(self.base_unit_combo, self.sale_price_input)
+        QWidget.setTabOrder(self.sale_price_input, self.pack_unit_combo)
+        QWidget.setTabOrder(self.pack_unit_combo, self.pack_conversion_input)
+        QWidget.setTabOrder(self.pack_conversion_input, self.purchase_price_input)
+        QWidget.setTabOrder(self.purchase_price_input, self.current_stock_input)
+        QWidget.setTabOrder(self.current_stock_input, self.min_stock_input)
+        QWidget.setTabOrder(self.min_stock_input, self.batch_input)
+        QWidget.setTabOrder(self.batch_input, self.expiry_input)
+        QWidget.setTabOrder(self.expiry_input, self.desc_input)
+        QWidget.setTabOrder(self.desc_input, save_btn)
 
     def save(self):
-        name = self.name_input.text()
-        generic = self.generic_input.text()
-        category = self.category_input.text()
-        price = self.price_input.text()
-        units = self.units_input.text()
-        is_discountable = 1 if self.discountable_cb.isChecked() else 0
+        data = {
+            'barcode': self.barcode_input.text() or None,
+            'name': self.name_input.text(),
+            'generic_name': self.generic_input.text(),
+            'category': self.category_combo.currentText(),
+            'manufacturer': self.manufacturer_input.text(),
+            'location': self.location_input.text(),
+            'base_unit_id': self.base_unit_combo.currentData(),
+            'sale_price': self.sale_price_input.text() or 0,
+            'pack_unit_id': self.pack_unit_combo.currentData(),
+            'pack_conversion': self.pack_conversion_input.text(),
+            'purchase_price_pack': self.purchase_price_input.text() or 0,
+            'current_stock': self.current_stock_input.text() or 0,
+            'min_stock_level': self.min_stock_input.text() or 10,
+            'batch_no': self.batch_input.text() or 'Unknown',
+            'expiry_date': self.expiry_input.text() or '2099-12-31',
+            'description': self.desc_input.text()
+        }
         
-        success, msg = self.controller.add_medicine(name, generic, category, price, units, is_discountable)
+        success, msg = self.controller.add_medicine_full(data)
         if success:
             QMessageBox.information(self, "Success", msg)
             self.accept()
@@ -84,6 +226,11 @@ class InventoryView(QWidget):
         add_med_btn.clicked.connect(self.show_add_medicine_dialog)
         header_layout.addWidget(add_med_btn)
         
+        delete_btn = QPushButton("Delete Selected")
+        delete_btn.setStyleSheet("background-color: #e74c3c; color: white; padding: 5px;")
+        delete_btn.clicked.connect(self.delete_selected)
+        header_layout.addWidget(delete_btn)
+        
         layout.addLayout(header_layout)
         
         # Table
@@ -109,6 +256,27 @@ class InventoryView(QWidget):
         dialog = AddMedicineDialog(self.controller, self)
         if dialog.exec():
             self.load_data()
+
+    def delete_selected(self):
+        row = self.table.currentRow()
+        if row >= 0:
+            med_id_item = self.table.item(row, 0)
+            if not med_id_item: return
+            med_id = int(med_id_item.text())
+            med_name = self.table.item(row, 1).text()
+            
+            reply = QMessageBox.question(self, 'Confirm Delete', f"Are you sure you want to delete '{med_name}'?", 
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                success, msg = self.controller.delete_medicine(med_id)
+                if success:
+                    QMessageBox.information(self, "Success", msg)
+                    self.load_data()
+                else:
+                    QMessageBox.warning(self, "Error", msg)
+        else:
+            QMessageBox.warning(self, "Selection Required", "Please select a row from the table to delete.")
 
     def load_data(self):
         stock = self.controller.get_inventory_stock()

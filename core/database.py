@@ -8,8 +8,8 @@ from core.models import Base
 # Load environment variables (if any)
 load_dotenv()
 
-# Determine connection URL (Fallback to SQLite if no POSTGRES_URL is provided)
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///pharmacy.db")
+# Determine connection URL
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost/pharmacy")
 
 # SQLite needs connect_args for multithreading bypass, Postgres doesn't
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}

@@ -53,9 +53,17 @@ class PurchaseController:
                 inv_item = Inventory(
                     medicine_id=item['medicine_id'], batch_no=item['batch_no'], 
                     expiry_date=item['expiry_date'], quantity=item['quantity'], 
-                    purchase_price=item['purchase_price'], supplier_id=supplier_id
+                    purchase_price=item['purchase_price'], supplier_id=supplier_id,
+                    sale_price=item.get('sale_price', 0.0)
                 )
                 db.add(inv_item)
+                
+                # Update Master Medicine Retail Price
+                if 'sale_price' in item and item['sale_price'] > 0:
+                    from core.models import Medicine
+                    med = db.query(Medicine).filter_by(id=item['medicine_id']).first()
+                    if med:
+                        med.sale_price = item['sale_price']
 
             db.commit()
             return True, "Purchase recorded successfully."

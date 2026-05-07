@@ -19,14 +19,28 @@ class POSController:
             or_(Medicine.name.ilike(search_term), Medicine.generic_name.ilike(search_term))
         ).group_by(Medicine.id).all()
         
-        return [{
-            "id": m.id, 
-            "name": m.name, 
-            "generic_name": m.generic_name, 
-            "sale_price": m.sale_price, 
-            "is_discountable": getattr(m, 'is_discountable', 1),
-            "stock": stock
-        } for m, stock in results]
+        final_results = []
+        for m, stock in results:
+            units = []
+            if getattr(m, 'base_unit', None):
+                units.append({'id': m.base_unit.id, 'name': m.base_unit.name, 'conversion': 1})
+            else:
+                units.append({'id': None, 'name': 'Unit', 'conversion': 1})
+                
+            for c in getattr(m, 'conversions', []):
+                units.append({'id': c.unit_id, 'name': getattr(c.unit, 'name', 'Pack'), 'conversion': c.conversion_to_base})
+                
+            final_results.append({
+                "id": m.id, 
+                "name": m.name, 
+                "generic_name": m.generic_name, 
+                "sale_price": m.sale_price, 
+                "is_discountable": getattr(m, 'is_discountable', 1),
+                "stock": stock,
+                "units": units
+            })
+            
+        return final_results
     
     def get_stock_for_medicine(self, medicine_id):
         db = next(get_db())
@@ -57,9 +71,20 @@ class POSController:
                 med_id = item['medicine_id']
                 qty = item['quantity']
                 price = item['price']
+                unit_id = item.get('unit_id', None)
+                conversion_to_base = item.get('conversion_to_base', 1)
                 
-                sale_item = SaleItem(sale_id=sale.id, medicine_id=med_id, quantity=qty, price=price)
+                sale_item = SaleItem(
+                    sale_id=sale.id, 
+                    medicine_id=med_id, 
+                    quantity=qty, 
+                    price=price,
+                    unit_id=unit_id,
+                    conversion_to_base=conversion_to_base
+                )
                 db.add(sale_item)
+                
+                qty_to_deduct = qty * conversion_to_base # CONVERT TO BASE UNITS FOR DEDUCTION
                 
                 # Use with_for_update() to lock these rows during the transaction to prevent concurrent multi-PC race conditions.
                 batches = db.query(Inventory).filter(

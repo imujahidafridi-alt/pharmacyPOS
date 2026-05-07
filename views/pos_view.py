@@ -139,16 +139,17 @@ class POSView(QWidget):
         left_layout.addWidget(title_lbl)
         
         self.cart_table = QTableWidget()
-        self.cart_table.setColumnCount(5)
-        self.cart_table.setHorizontalHeaderLabels(["ID", "Item Name (Enter to Search)", "Retail Price", "Qty", "Total"])
+        self.cart_table.setColumnCount(6)
+        self.cart_table.setHorizontalHeaderLabels(["ID", "Item Name (Enter to Search)", "Unit", "Retail Price", "Qty", "Total"])
         self.cart_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.cart_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.cart_table.setColumnHidden(0, True) # Hide ID column
         self.cart_table.verticalHeader().setDefaultSectionSize(32)
         
         # Apply custom delegate for auto-select and Enter->Tab behavior
         self.delegate = ExcelDelegate(self.cart_table)
-        self.cart_table.setItemDelegateForColumn(2, self.delegate)
         self.cart_table.setItemDelegateForColumn(3, self.delegate)
+        self.cart_table.setItemDelegateForColumn(4, self.delegate)
         
         self.cart_table.keyPressEvent = self.table_key_press
         self.cart_table.itemChanged.connect(self.on_item_changed)
@@ -191,6 +192,11 @@ class POSView(QWidget):
         form_layout.addRow("Amount Paid (Rs):", self.amount_paid_input)
         
         right_layout.addLayout(form_layout)
+        
+        clear_btn = QPushButton("Clear Cart")
+        clear_btn.setStyleSheet("background-color: #e74c3c; color: white; padding: 10px; font-size: 14px; font-weight: bold;")
+        clear_btn.clicked.connect(self.clear_all)
+        right_layout.addWidget(clear_btn)
         
         self.checkout_btn = QPushButton("Complete Sale (F12)")
         self.checkout_btn.setObjectName("successBtn")
@@ -237,12 +243,29 @@ class POSView(QWidget):
         row = self.cart_table.currentRow()
         col = self.cart_table.currentColumn()
         
+        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
+            if row >= 0:
+                self.cart_table.removeRow(row)
+                self.update_totals()
+                self.ensure_empty_row()
+                return
+        
         if event.key() in [Qt.Key.Key_Return, Qt.Key.Key_Enter]:
             if col == 1:
                 self.open_search_dialog(row)
                 return
                 
         type(self.cart_table).keyPressEvent(self.cart_table, event)
+
+    def clear_all(self):
+        reply = QMessageBox.question(self, "Clear Cart", "Are you sure you want to clear the POS screen?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.cart_table.blockSignals(True)
+            self.cart_table.setRowCount(0)
+            self.ensure_empty_row()
+            self.discount_input.setText("0")
+            self.cart_table.blockSignals(False)
+            self.update_totals()
 
     def ensure_empty_row(self):
         self.cart_table.blockSignals(True)
@@ -255,9 +278,11 @@ class POSView(QWidget):
                 
         if row_count == 0 or last_is_filled:
             self.cart_table.insertRow(row_count)
-            for col in range(5):
+            for col in range(6):
+                if col == 2:
+                    continue # Unit column is combobox
                 it = QTableWidgetItem("")
-                if col in [0, 1, 4]:
+                if col in [0, 1, 5]:
                     it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
                 else:
                     it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable)
@@ -266,8 +291,10 @@ class POSView(QWidget):
 
     def clear_row(self, row):
         self.cart_table.blockSignals(True)
-        for col in range(5):
-            if self.cart_table.item(row, col):
+        for col in range(6):
+            if col == 2:
+                self.cart_table.removeCellWidget(row, 2)
+            elif self.cart_table.item(row, col):
                 self.cart_table.item(row, col).setText("")
         self.cart_table.blockSignals(False)
 
@@ -281,42 +308,76 @@ class POSView(QWidget):
                 if r != row:
                     id_item = self.cart_table.item(r, 0)
                     if id_item and id_item.text() == str(med['id']):
-                        qty_item = self.cart_table.item(r, 3)
+                        qty_item = self.cart_table.item(r, 4)
                         current_qty = int(qty_item.text()) if qty_item.text() else 0
                         qty_item.setText(str(current_qty + 1))
                         
                         self.clear_row(row)
                         self.recalculate_row(r)
-                        self.cart_table.setCurrentCell(r, 3) # Focus qty of merged row
+                        self.cart_table.setCurrentCell(r, 4) # Focus qty of merged row
                         return
             
             self.cart_table.blockSignals(True)
             self.cart_table.setItem(row, 0, QTableWidgetItem(str(med['id'])))
             self.cart_table.setItem(row, 1, QTableWidgetItem(med['name']))
-            self.cart_table.setItem(row, 2, QTableWidgetItem(str(med['sale_price'])))
-            self.cart_table.setItem(row, 3, QTableWidgetItem("1"))
-            self.cart_table.setItem(row, 4, QTableWidgetItem(str(med['sale_price'])))
             
-            # Store is_discountable flag
+            # Setup Unit ComboBox
+            unit_combo = QComboBox()
+            units = med.get('units', [])
+            for u in units:
+                unit_combo.addItem(u['name'], u)
+            
+            base_price = med['sale_price']
+            
+            # Store data in col 0 for easy access
             self.cart_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, med.get('is_discountable', 1))
+            self.cart_table.item(row, 0).setData(Qt.ItemDataRole.UserRole + 1, base_price)
+            
+            unit_combo.currentIndexChanged.connect(lambda: self.on_unit_changed(row))
+            self.cart_table.setCellWidget(row, 2, unit_combo)
+            
+            initial_price = base_price * units[0]['conversion'] if units else base_price
+            
+            self.cart_table.setItem(row, 3, QTableWidgetItem(f"{initial_price:.2f}"))
+            self.cart_table.setItem(row, 4, QTableWidgetItem("1"))
+            self.cart_table.setItem(row, 5, QTableWidgetItem(f"{initial_price:.2f}"))
+            
             self.cart_table.blockSignals(False)
             
             self.recalculate_row(row)
             self.ensure_empty_row()
             
-            # Jump to Price editing
-            self.cart_table.setCurrentCell(row, 2)
-            self.cart_table.editItem(self.cart_table.item(row, 2))
+            # Jump to Qty editing
+            self.cart_table.setCurrentCell(row, 4)
+            self.cart_table.editItem(self.cart_table.item(row, 4))
+
+    def on_unit_changed(self, row):
+        id_item = self.cart_table.item(row, 0)
+        if not id_item: return
+        
+        combo = self.cart_table.cellWidget(row, 2)
+        if not combo: return
+        
+        unit_data = combo.currentData()
+        base_price = id_item.data(Qt.ItemDataRole.UserRole + 1)
+        
+        if unit_data and base_price:
+            new_price = base_price * unit_data['conversion']
+            self.cart_table.blockSignals(True)
+            self.cart_table.item(row, 3).setText(f"{new_price:.2f}")
+            self.cart_table.blockSignals(False)
+            
+        self.recalculate_row(row)
 
     def on_item_changed(self, item):
-        if item.column() in [2, 3]: # Price or Qty
+        if item.column() in [3, 4]: # Price or Qty
             self.recalculate_row(item.row())
 
     def recalculate_row(self, row):
         self.cart_table.blockSignals(True)
         try:
-            price_text = self.cart_table.item(row, 2).text()
-            qty_text = self.cart_table.item(row, 3).text()
+            price_text = self.cart_table.item(row, 3).text()
+            qty_text = self.cart_table.item(row, 4).text()
             
             if not price_text or not qty_text:
                 self.cart_table.blockSignals(False)
@@ -328,16 +389,23 @@ class POSView(QWidget):
             id_item = self.cart_table.item(row, 0)
             if id_item and id_item.text():
                 med_id = int(id_item.text())
+                
+                # Validation against base stock
+                combo = self.cart_table.cellWidget(row, 2)
+                conversion = combo.currentData()['conversion'] if combo and combo.currentData() else 1
+                total_base_qty_needed = qty * conversion
+                
                 stock = self.controller.get_stock_for_medicine(med_id)
-                if qty > stock:
-                    QMessageBox.warning(self, "Out of Stock", f"Only {stock} items available.")
-                    qty = stock
-                    self.cart_table.item(row, 3).setText(str(qty))
+                if total_base_qty_needed > stock:
+                    max_allowed_qty = int(stock / conversion)
+                    QMessageBox.warning(self, "Out of Stock", f"Only {stock} base units available. Maximum allowed is {max_allowed_qty}.")
+                    qty = max_allowed_qty
+                    self.cart_table.item(row, 4).setText(str(qty))
                     
             total = price * qty
-            self.cart_table.item(row, 4).setText(f"{total:.2f}")
+            self.cart_table.item(row, 5).setText(f"{total:.2f}")
             self.ensure_empty_row()
-        except ValueError:
+        except (ValueError, TypeError):
             pass
         finally:
             self.cart_table.blockSignals(False)
@@ -350,8 +418,8 @@ class POSView(QWidget):
             id_item = self.cart_table.item(r, 0)
             if id_item and id_item.text():
                 try:
-                    price = float(self.cart_table.item(r, 2).text())
-                    qty = int(self.cart_table.item(r, 3).text())
+                    price = float(self.cart_table.item(r, 3).text())
+                    qty = int(self.cart_table.item(r, 4).text())
                     is_discountable = id_item.data(Qt.ItemDataRole.UserRole)
                     
                     row_tot = price * qty
@@ -408,16 +476,24 @@ class POSView(QWidget):
                 try:
                     med_id = int(id_item.text())
                     name = self.cart_table.item(r, 1).text()
-                    qty = int(self.cart_table.item(r, 3).text())
-                    price = float(self.cart_table.item(r, 2).text())
+                    qty = int(self.cart_table.item(r, 4).text())
+                    price = float(self.cart_table.item(r, 3).text())
+                    
+                    combo = self.cart_table.cellWidget(r, 2)
+                    unit_data = combo.currentData() if combo else None
+                    unit_id = unit_data['id'] if unit_data else None
+                    conversion_to_base = unit_data['conversion'] if unit_data else 1
+                    
                     if qty > 0:
                         cart_items.append({
                             'medicine_id': med_id,
                             'name': name,
                             'quantity': qty,
-                            'price': price
+                            'price': price,
+                            'unit_id': unit_id,
+                            'conversion_to_base': conversion_to_base
                         })
-                except ValueError:
+                except (ValueError, TypeError):
                     pass
                     
         if not cart_items:

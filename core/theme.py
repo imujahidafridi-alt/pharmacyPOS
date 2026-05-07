@@ -40,10 +40,6 @@ QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
 }
 
 /* Dropdown specific */
-QComboBox::drop-down {
-    border: none;
-    background: transparent;
-}
 QComboBox QAbstractItemView {
     border: 1px solid #CBD5E1;
     background-color: #FFFFFF;
