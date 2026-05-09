@@ -10,3 +10,4 @@ ENV/
 .venv/
 .vs/
 .vscode/
+logs/

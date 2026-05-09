@@ -98,8 +98,15 @@ class AddMedicineDialog(QDialog):
         price_layout.addWidget(QLabel("Units per Pack:"), 1, 2)
         price_layout.addWidget(self.pack_conversion_input, 1, 3)
         
-        price_layout.addWidget(QLabel("Purchase Price (Per Pack):"), 2, 0)
-        price_layout.addWidget(self.purchase_price_input, 2, 1)
+        self.default_sale_unit_combo = QComboBox()
+        self.default_sale_unit_combo.addItem("Base Unit", "base")
+        self.default_sale_unit_combo.addItem("Pack Unit", "pack")
+        
+        price_layout.addWidget(QLabel("Default Sale Unit:"), 2, 0)
+        price_layout.addWidget(self.default_sale_unit_combo, 2, 1)
+        
+        price_layout.addWidget(QLabel("Purchase Price (Per Pack):"), 2, 2)
+        price_layout.addWidget(self.purchase_price_input, 2, 3)
         
         price_group.setLayout(price_layout)
         main_layout.addWidget(price_group)
@@ -182,6 +189,7 @@ class AddMedicineDialog(QDialog):
             'sale_price': self.sale_price_input.text() or 0,
             'pack_unit_id': self.pack_unit_combo.currentData(),
             'pack_conversion': self.pack_conversion_input.text(),
+            'default_sale_unit': self.default_sale_unit_combo.currentData(),
             'purchase_price_pack': self.purchase_price_input.text() or 0,
             'current_stock': self.current_stock_input.text() or 0,
             'min_stock_level': self.min_stock_input.text() or 10,
@@ -235,8 +243,8 @@ class InventoryView(QWidget):
         
         # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["ID", "Medicine Name", "Batch No", "Expiry Date", "Quantity", "Purchase Price"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Medicine Name", "Batch No", "Expiry Date", "Quantity", "Purchase Price"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
         
@@ -260,10 +268,12 @@ class InventoryView(QWidget):
     def delete_selected(self):
         row = self.table.currentRow()
         if row >= 0:
-            med_id_item = self.table.item(row, 0)
-            if not med_id_item: return
-            med_id = int(med_id_item.text())
-            med_name = self.table.item(row, 1).text()
+            med_name_item = self.table.item(row, 0)
+            if not med_name_item: return
+            med_id = med_name_item.data(Qt.ItemDataRole.UserRole)
+            if med_id is None:
+                return
+            med_name = med_name_item.text()
             
             reply = QMessageBox.question(self, 'Confirm Delete', f"Are you sure you want to delete '{med_name}'?", 
                                          QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
@@ -282,9 +292,10 @@ class InventoryView(QWidget):
         stock = self.controller.get_inventory_stock()
         self.table.setRowCount(len(stock))
         for row_idx, item in enumerate(stock):
-            self.table.setItem(row_idx, 0, QTableWidgetItem(str(item['id'])))
-            self.table.setItem(row_idx, 1, QTableWidgetItem(item['name']))
-            self.table.setItem(row_idx, 2, QTableWidgetItem(item['batch_no']))
-            self.table.setItem(row_idx, 3, QTableWidgetItem(item['expiry_date']))
-            self.table.setItem(row_idx, 4, QTableWidgetItem(str(item['quantity'])))
-            self.table.setItem(row_idx, 5, QTableWidgetItem(str(item['purchase_price'])))
+            name_item = QTableWidgetItem(item['name'])
+            name_item.setData(Qt.ItemDataRole.UserRole, item['id'])
+            self.table.setItem(row_idx, 0, name_item)
+            self.table.setItem(row_idx, 1, QTableWidgetItem(item['batch_no']))
+            self.table.setItem(row_idx, 2, QTableWidgetItem(item['expiry_date']))
+            self.table.setItem(row_idx, 3, QTableWidgetItem(str(item['quantity'])))
+            self.table.setItem(row_idx, 4, QTableWidgetItem(str(item['purchase_price'])))

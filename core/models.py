@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Date
 from sqlalchemy.orm import relationship, declarative_base
 import datetime
 
@@ -35,7 +35,7 @@ class AuditLog(Base):
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     action = Column(String, nullable=False)
     details = Column(String)
-    timestamp = Column(String, default=lambda: datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    timestamp = Column(DateTime, default=datetime.datetime.now)
 
     # Relationships
     user = relationship("User")
@@ -49,17 +49,18 @@ class Medicine(Base):
     generic_name = Column(String)
     category = Column(String)
     manufacturer = Column(String)
-    mrp = Column(Float, nullable=False, default=0.0) # Printed Retail Price
     sale_price = Column(Float, nullable=False) # Default Base Sale Price
     is_discountable = Column(Integer, default=1) # 1 for True, 0 for False (SQLite compatibility)
     base_unit_id = Column(Integer, ForeignKey('units.id'))
+    default_sale_unit_id = Column(Integer, ForeignKey('units.id'), nullable=True) # Defaults to this unit in POS
     min_stock_level = Column(Integer, default=10)
     location = Column(String)
     status = Column(String, default='Active')
     description = Column(String)
 
     # Relationships
-    base_unit = relationship("Unit")
+    base_unit = relationship("Unit", foreign_keys=[base_unit_id])
+    default_sale_unit = relationship("Unit", foreign_keys=[default_sale_unit_id])
     conversions = relationship("UnitConversion", back_populates="medicine", cascade="all, delete-orphan")
     inventory = relationship("Inventory", back_populates="medicine")
     sale_items = relationship("SaleItem", back_populates="medicine")
@@ -84,7 +85,7 @@ class Customer(Base):
     name = Column(String, nullable=False)
     phone = Column(String)
     address = Column(String)
-    created_at = Column(String, default=lambda: datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    created_at = Column(DateTime, default=datetime.datetime.now)
 
     # Relationships
     ledgers = relationship("CustomerLedger", back_populates="customer")
@@ -95,7 +96,7 @@ class CustomerLedger(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     customer_id = Column(Integer, ForeignKey('customers.id'), nullable=False)
-    date = Column(String, nullable=False)
+    date = Column(DateTime, nullable=False)
     transaction_type = Column(String, nullable=False) # 'SALE' or 'PAYMENT'
     amount = Column(Float, nullable=False) # Positive for SALE (increases debt), Negative for PAYMENT
     sale_id = Column(Integer, ForeignKey('sales.id'), nullable=True)
@@ -111,10 +112,9 @@ class Inventory(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     medicine_id = Column(Integer, ForeignKey('medicines.id'), nullable=False)
     batch_no = Column(String, nullable=False)
-    expiry_date = Column(String, nullable=False)
+    expiry_date = Column(Date, nullable=False)
     quantity = Column(Integer, nullable=False, default=0) # ALWAYS in base units
     purchase_price = Column(Float, nullable=False) # Per Base Unit
-    mrp = Column(Float, nullable=False, default=0.0) # Per Base Unit (Override per batch)
     sale_price = Column(Float, nullable=False) # Per Base Unit (Override per batch)
     supplier_id = Column(Integer, ForeignKey('suppliers.id'))
 
@@ -126,7 +126,7 @@ class Sale(Base):
     __tablename__ = 'sales'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(String, nullable=False)
+    date = Column(DateTime, nullable=False)
     total_amount = Column(Float, nullable=False)
     discount = Column(Float, default=0)
     payment_method = Column(String, nullable=False)
@@ -161,7 +161,7 @@ class Purchase(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     supplier_id = Column(Integer, ForeignKey('suppliers.id'), nullable=False)
-    date = Column(String, nullable=False)
+    date = Column(DateTime, nullable=False)
     total_amount = Column(Float, nullable=False)
 
     # Relationships
@@ -177,7 +177,7 @@ class PurchaseItem(Base):
     unit_id = Column(Integer, ForeignKey('units.id'), nullable=True)
     conversion_to_base = Column(Integer, nullable=False, default=1)
     batch_no = Column(String, nullable=False)
-    expiry_date = Column(String, nullable=False)
+    expiry_date = Column(Date, nullable=False)
     quantity = Column(Integer, nullable=False) # Quantity IN SELECTED UNIT
     purchase_price = Column(Float, nullable=False) # Price IN SELECTED UNIT
 

@@ -162,12 +162,14 @@ class CustomersView(QWidget):
         layout.addWidget(lbl_value)
         return card
 
-    def format_date(self, date_str):
+    def format_date(self, date_value):
+        if isinstance(date_value, datetime):
+            return date_value.strftime("%d %b %Y, %I:%M %p")
         try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+            dt = datetime.strptime(str(date_value), "%Y-%m-%d %H:%M:%S")
             return dt.strftime("%d %b %Y, %I:%M %p")
-        except:
-            return date_str
+        except Exception:
+            return str(date_value)
 
     def filter_customers(self, text):
         text = text.lower()

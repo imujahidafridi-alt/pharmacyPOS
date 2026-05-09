@@ -1,9 +1,9 @@
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, 
-    QTableWidgetItem, QLabel, QLineEdit, QMessageBox, QComboBox, QHeaderView, QListWidget, QFormLayout,
-    QDialog, QStyledItemDelegate, QApplication
+﻿from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableView,
+    QLabel, QLineEdit, QMessageBox, QComboBox, QHeaderView, QFormLayout,
+    QDialog, QStyledItemDelegate, QApplication, QTableWidget, QTableWidgetItem
 )
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import Qt, QEvent, QAbstractTableModel, QModelIndex
 from PyQt6.QtGui import QKeySequence, QShortcut, QKeyEvent
 from controllers.pos_controller import POSController
 from controllers.customers_controller import CustomersController
@@ -13,14 +13,192 @@ class ExcelDelegate(QStyledItemDelegate):
         super().setEditorData(editor, index)
         if hasattr(editor, 'selectAll'):
             editor.selectAll()
-            
+
     def eventFilter(self, editor, event):
         if event.type() == QEvent.Type.KeyPress and event.key() in [Qt.Key.Key_Return, Qt.Key.Key_Enter]:
-            # Simulate Tab key press to move right and wrap to next row
             tab_event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.KeyboardModifier.NoModifier)
             QApplication.sendEvent(editor, tab_event)
             return True
         return super().eventFilter(editor, event)
+
+class UnitComboDelegate(QStyledItemDelegate):
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        row = index.model().row_data(index.row())
+        for unit in row.get('units', []):
+            combo.addItem(unit['name'], unit)
+        return combo
+
+    def setEditorData(self, editor, index):
+        current_value = index.model().data(index, Qt.ItemDataRole.EditRole)
+        for i in range(editor.count()):
+            item_data = editor.itemData(i)
+            if isinstance(current_value, dict) and isinstance(item_data, dict):
+                if item_data.get('id') == current_value.get('id'):
+                    editor.setCurrentIndex(i)
+                    return
+            elif item_data == current_value:
+                editor.setCurrentIndex(i)
+                return
+
+    def setModelData(self, editor, model, index):
+        unit = editor.currentData()
+        model.setData(index, unit, Qt.ItemDataRole.EditRole)
+
+class CartTableModel(QAbstractTableModel):
+    headers = ["Item Name", "Unit", "Sale Price", "Qty", "Total"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows = []
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(self.headers)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+
+        row = self._rows[index.row()]
+        col = index.column()
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0:
+                return row.get('name', '')
+            if col == 1:
+                return row.get('unit', {}).get('name', '')
+            if col == 2:
+                return f"{row.get('price', 0.0):.2f}" if row.get('id') is not None else ""
+            if col == 3:
+                return str(row.get('qty', '')) if row.get('id') is not None else ""
+            if col == 4:
+                return f"{row.get('qty', 0) * row.get('price', 0.0):.2f}" if row.get('id') is not None else ""
+
+        if role == Qt.ItemDataRole.EditRole:
+            if col == 1:
+                return row.get('unit', {})
+            if col == 2:
+                return row.get('price', 0.0)
+            if col == 3:
+                return row.get('qty', 0)
+
+        if role == Qt.ItemDataRole.UserRole:
+            return row
+
+        return None
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return self.headers[section]
+        return None
+
+    def flags(self, index):
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+
+        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        row = self._rows[index.row()]
+        if row.get('id') is not None and index.column() in [1, 2, 3]:
+            flags |= Qt.ItemFlag.ItemIsEditable
+        return flags
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if role != Qt.ItemDataRole.EditRole or not index.isValid():
+            return False
+
+        row = self._rows[index.row()]
+        col = index.column()
+
+        if col == 2:
+            try:
+                row['price'] = float(value)
+            except (ValueError, TypeError):
+                return False
+        elif col == 3:
+            try:
+                row['qty'] = int(value)
+            except (ValueError, TypeError):
+                return False
+        elif col == 1 and isinstance(value, dict):
+            row['unit'] = value
+            row['price'] = row.get('base_price', 0.0) * value.get('conversion', 1)
+        else:
+            return False
+
+        self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount() - 1), [Qt.ItemDataRole.DisplayRole])
+        return True
+
+    def append_blank_row(self):
+        self.beginInsertRows(QModelIndex(), self.rowCount(), self.rowCount())
+        self._rows.append({'id': None, 'name': '', 'units': [], 'unit': {}, 'base_price': 0.0, 'price': 0.0, 'qty': 0, 'is_discountable': 1})
+        self.endInsertRows()
+
+    def add_item(self, med, row=None):
+        for idx, existing in enumerate(self._rows):
+            if existing.get('id') == med['id']:
+                existing['qty'] = existing.get('qty', 0) + 1
+                self.dataChanged.emit(self.index(idx, 0), self.index(idx, self.columnCount() - 1), [Qt.ItemDataRole.DisplayRole])
+                return idx
+
+        if row is None or row < 0 or row >= self.rowCount() or self._rows[row].get('id') is not None:
+            row = self.rowCount()
+            self.beginInsertRows(QModelIndex(), row, row)
+            self._rows.append({})
+            self.endInsertRows()
+
+        units = med.get('units') or [{'id': None, 'name': 'Unit', 'conversion': 1}]
+        selected_unit = units[0]
+        self._rows[row] = {
+            'id': med['id'],
+            'name': med['name'],
+            'units': units,
+            'unit': selected_unit,
+            'base_price': med['sale_price'],
+            'price': med['sale_price'] * selected_unit.get('conversion', 1),
+            'qty': 1,
+            'is_discountable': med.get('is_discountable', 1)
+        }
+        self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1), [Qt.ItemDataRole.DisplayRole])
+        return row
+
+    def remove_row(self, row):
+        if 0 <= row < self.rowCount():
+            self.beginRemoveRows(QModelIndex(), row, row)
+            self._rows.pop(row)
+            self.endRemoveRows()
+
+    def ensure_empty_row(self):
+        if self.rowCount() == 0 or self._rows[-1].get('id') is not None:
+            self.append_blank_row()
+
+    def get_cart_items(self):
+        items = []
+        for row in self._rows:
+            if row.get('id') is not None and row.get('qty', 0) > 0:
+                items.append({
+                    'medicine_id': row['id'],
+                    'name': row['name'],
+                    'quantity': row['qty'],
+                    'price': row['price'],
+                    'unit_id': row.get('unit', {}).get('id'),
+                    'conversion_to_base': row.get('unit', {}).get('conversion', 1),
+                    'is_discountable': row.get('is_discountable', 1)
+                })
+        return items
+
+    def clear(self):
+        self.beginResetModel()
+        self._rows = []
+        self.endResetModel()
+        self.append_blank_row()
+
+    def row_data(self, row):
+        if 0 <= row < self.rowCount():
+            return self._rows[row]
+        return {}
 
 class MedicineSearchDialog(QDialog):
     def __init__(self, controller, parent=None):
@@ -29,17 +207,17 @@ class MedicineSearchDialog(QDialog):
         self.selected_medicine = None
         self.current_search_results = []
         self.init_ui()
-        
+
     def init_ui(self):
         self.setWindowTitle("Search Medicine")
         self.resize(700, 400)
         layout = QVBoxLayout(self)
-        
+
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Start typing to search medicine...")
         self.search_input.textChanged.connect(self.search_medicines)
         layout.addWidget(self.search_input)
-        
+
         self.search_results = QTableWidget()
         self.search_results.setColumnCount(4)
         self.search_results.setHorizontalHeaderLabels(["Name", "Generic Formula", "Available Stock", "Price (Rs)"])
@@ -51,27 +229,13 @@ class MedicineSearchDialog(QDialog):
         self.search_results.setAlternatingRowColors(True)
         self.search_results.verticalHeader().setDefaultSectionSize(30)
         self.search_results.verticalHeader().setVisible(False)
-        self.search_results.setStyleSheet("""
-            QTableWidget {
-                outline: none;
-            }
-            QTableWidget::item {
-                outline: none;
-            }
-            QTableWidget::item:selected {
-                background-color: #0369A1;
-                color: #FFFFFF;
-                font-weight: bold;
-                border: none;
-            }
-        """)
+        self.search_results.setStyleSheet("QTableWidget { outline: none; } QTableWidget::item { outline: none; } QTableWidget::item:selected { background-color: #0369A1; color: #FFFFFF; font-weight: bold; border: none; }")
         self.search_results.cellDoubleClicked.connect(self.select_item_from_click)
         layout.addWidget(self.search_results)
-        
-        # Install event filters after all widgets are created
+
         self.search_input.installEventFilter(self)
         self.search_results.installEventFilter(self)
-        
+
     def eventFilter(self, source, event):
         if source is self.search_input and event.type() == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Down and self.search_results.rowCount() > 0:
@@ -88,33 +252,27 @@ class MedicineSearchDialog(QDialog):
                 self.select_item_from_table()
                 return True
         return super().eventFilter(source, event)
-        
+
     def search_medicines(self, text):
         self.search_results.setRowCount(0)
         self.current_search_results = []
         if len(text) < 2:
             return
-            
+
         results = self.controller.search_medicines(text)
         self.current_search_results = results
-        
         self.search_results.setRowCount(len(results))
         for i, r in enumerate(results):
             self.search_results.setItem(i, 0, QTableWidgetItem(r['name']))
             self.search_results.setItem(i, 1, QTableWidgetItem(r['generic_name']))
-            
-            stock_item = QTableWidgetItem(str(r.get('stock', 0)))
-            if r.get('stock', 0) <= 0:
-                stock_item.setForeground(Qt.GlobalColor.red)
-            else:
-                stock_item.setForeground(Qt.GlobalColor.darkGreen)
-                
+            stock_item = QTableWidgetItem(r.get('human_stock', str(r.get('stock', 0))))
+            stock_item.setForeground(Qt.GlobalColor.red if r.get('stock', 0) <= 0 else Qt.GlobalColor.darkGreen)
             self.search_results.setItem(i, 2, stock_item)
             self.search_results.setItem(i, 3, QTableWidgetItem(f"{r['sale_price']:.2f}"))
-            
+
     def select_item_from_click(self, row, column):
         self.select_item_from_table()
-            
+
     def select_item_from_table(self):
         row = self.search_results.currentRow()
         if row >= 0 and row < len(self.current_search_results):
@@ -130,104 +288,105 @@ class POSView(QWidget):
 
     def init_ui(self):
         layout = QHBoxLayout(self)
-        
-        # Left side: Spreadsheet Cart
+
         left_layout = QVBoxLayout()
-        
         title_lbl = QLabel("POS Billing (Excel-Style Grid)")
         title_lbl.setObjectName("pageTitle")
         left_layout.addWidget(title_lbl)
-        
-        self.cart_table = QTableWidget()
-        self.cart_table.setColumnCount(6)
-        self.cart_table.setHorizontalHeaderLabels(["ID", "Item Name (Enter to Search)", "Unit", "Retail Price", "Qty", "Total"])
-        self.cart_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.cart_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.cart_table.setColumnHidden(0, True) # Hide ID column
+
+        help_text = QLabel("Press ENTER on the Item Name cell to search. Use arrow keys to navigate and hit ENTER to add the selected medicine.")
+        help_text.setStyleSheet("color: gray; font-size: 12px; font-style: italic;")
+        left_layout.addWidget(help_text)
+
+        self.cart_model = CartTableModel(self)
+        self.cart_model.ensure_empty_row()
+
+        self.cart_table = QTableView()
+        self.cart_table.setModel(self.cart_model)
+        self.cart_table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.cart_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.cart_table.setEditTriggers(QTableView.EditTrigger.SelectedClicked | QTableView.EditTrigger.EditKeyPressed)
         self.cart_table.verticalHeader().setDefaultSectionSize(32)
-        
-        # Apply custom delegate for auto-select and Enter->Tab behavior
-        self.delegate = ExcelDelegate(self.cart_table)
-        self.cart_table.setItemDelegateForColumn(3, self.delegate)
-        self.cart_table.setItemDelegateForColumn(4, self.delegate)
-        
-        self.cart_table.keyPressEvent = self.table_key_press
-        self.cart_table.itemChanged.connect(self.on_item_changed)
-        
+        self.cart_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.cart_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.cart_table.setItemDelegateForColumn(1, UnitComboDelegate(self.cart_table))
+        self.cart_table.setItemDelegateForColumn(2, ExcelDelegate(self.cart_table))
+        self.cart_table.setItemDelegateForColumn(3, ExcelDelegate(self.cart_table))
+        self.cart_table.installEventFilter(self)
+        self.cart_model.dataChanged.connect(self.on_model_data_changed)
+
         left_layout.addWidget(self.cart_table)
         layout.addLayout(left_layout, stretch=2)
-        
-        # Right side: Checkout panel
+
         right_layout = QVBoxLayout()
-        
         title = QLabel("Checkout")
         title.setObjectName("sectionTitle")
         right_layout.addWidget(title)
-        
+
         form_layout = QFormLayout()
-        
         self.customer_dropdown = QComboBox()
         self.customer_dropdown.addItem("Walk-in Customer (None)", None)
         form_layout.addRow("Customer:", self.customer_dropdown)
-        
         self.subtotal_lbl = QLabel("0.00")
         form_layout.addRow("Subtotal:", self.subtotal_lbl)
-        
         self.discount_input = QLineEdit("0")
         self.discount_input.setPlaceholderText("Amount or % (Press F3)")
         self.discount_input.textChanged.connect(self.update_totals)
         form_layout.addRow("Discount:", self.discount_input)
-        
         self.total_lbl = QLabel("0.00")
         self.total_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: green;")
         form_layout.addRow("Grand Total:", self.total_lbl)
-        
         self.payment_method = QComboBox()
         self.payment_method.addItems(["Cash", "Card", "Easypaisa/JazzCash", "Credit (Khata)"])
         self.payment_method.currentTextChanged.connect(self.on_payment_method_changed)
         form_layout.addRow("Payment Method:", self.payment_method)
-        
         self.amount_paid_input = QLineEdit("0.00")
         self.amount_paid_input.setPlaceholderText("Press F4")
         form_layout.addRow("Amount Paid (Rs):", self.amount_paid_input)
-        
         right_layout.addLayout(form_layout)
-        
+
         clear_btn = QPushButton("Clear Cart")
         clear_btn.setStyleSheet("background-color: #e74c3c; color: white; padding: 10px; font-size: 14px; font-weight: bold;")
         clear_btn.clicked.connect(self.clear_all)
         right_layout.addWidget(clear_btn)
-        
+
         self.checkout_btn = QPushButton("Complete Sale (F12)")
         self.checkout_btn.setObjectName("successBtn")
         self.checkout_btn.clicked.connect(self.process_sale)
         right_layout.addWidget(self.checkout_btn)
-        
         right_layout.addStretch()
         layout.addLayout(right_layout, stretch=1)
 
-        # Shortcuts
         self.shortcut_discount = QShortcut(QKeySequence("F3"), self)
         self.shortcut_discount.activated.connect(self.focus_discount)
-
         self.shortcut_amount = QShortcut(QKeySequence("F4"), self)
         self.shortcut_amount.activated.connect(self.focus_amount)
-
         self.shortcut_checkout = QShortcut(QKeySequence("F12"), self)
         self.shortcut_checkout.activated.connect(self.process_sale)
-        
+        self.shortcut_new_sale = QShortcut(QKeySequence("Ctrl+N"), self)
+        self.shortcut_new_sale.activated.connect(self.clear_all)
+        self.shortcut_save_sale = QShortcut(QKeySequence("Ctrl+S"), self)
+        self.shortcut_save_sale.activated.connect(self.process_sale)
+
         self.load_customers()
-        self.ensure_empty_row()
+
+    def eventFilter(self, source, event):
+        if source is self.cart_table and event.type() == QEvent.Type.KeyPress:
+            row = self.cart_table.currentIndex().row()
+            col = self.cart_table.currentIndex().column()
+            if event.key() in [Qt.Key.Key_Return, Qt.Key.Key_Enter] and col == 0:
+                self.open_search_dialog(row)
+                return True
+            if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and row >= 0:
+                self.cart_model.remove_row(row)
+                self.cart_model.ensure_empty_row()
+                self.update_totals()
+                return True
+        return super().eventFilter(source, event)
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.focus_empty_row()
-        
-    def focus_empty_row(self):
-        row_count = self.cart_table.rowCount()
-        if row_count > 0:
-            self.cart_table.setCurrentCell(row_count - 1, 1)
-            self.cart_table.setFocus()
+        self.focus_item_name()
 
     def load_customers(self):
         self.customer_dropdown.clear()
@@ -236,221 +395,24 @@ class POSView(QWidget):
         for c in customers:
             self.customer_dropdown.addItem(f"{c['name']} ({c['phone']})", c['id'])
 
-    def load_data(self):
-        self.load_customers()
-
-    def table_key_press(self, event):
-        row = self.cart_table.currentRow()
-        col = self.cart_table.currentColumn()
-        
-        if event.key() == Qt.Key.Key_Delete or event.key() == Qt.Key.Key_Backspace:
-            if row >= 0:
-                self.cart_table.removeRow(row)
-                self.update_totals()
-                self.ensure_empty_row()
-                return
-        
-        if event.key() in [Qt.Key.Key_Return, Qt.Key.Key_Enter]:
-            if col == 1:
-                self.open_search_dialog(row)
-                return
-                
-        type(self.cart_table).keyPressEvent(self.cart_table, event)
-
     def clear_all(self):
         reply = QMessageBox.question(self, "Clear Cart", "Are you sure you want to clear the POS screen?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.Yes:
-            self.cart_table.blockSignals(True)
-            self.cart_table.setRowCount(0)
-            self.ensure_empty_row()
-            self.discount_input.setText("0")
-            self.cart_table.blockSignals(False)
+            self.cart_model.clear()
             self.update_totals()
-
-    def ensure_empty_row(self):
-        self.cart_table.blockSignals(True)
-        row_count = self.cart_table.rowCount()
-        last_is_filled = False
-        if row_count > 0:
-            id_item = self.cart_table.item(row_count - 1, 0)
-            if id_item and id_item.text():
-                last_is_filled = True
-                
-        if row_count == 0 or last_is_filled:
-            self.cart_table.insertRow(row_count)
-            for col in range(6):
-                if col == 2:
-                    continue # Unit column is combobox
-                it = QTableWidgetItem("")
-                if col in [0, 1, 5]:
-                    it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-                else:
-                    it.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsEditable)
-                self.cart_table.setItem(row_count, col, it)
-        self.cart_table.blockSignals(False)
-
-    def clear_row(self, row):
-        self.cart_table.blockSignals(True)
-        for col in range(6):
-            if col == 2:
-                self.cart_table.removeCellWidget(row, 2)
-            elif self.cart_table.item(row, col):
-                self.cart_table.item(row, col).setText("")
-        self.cart_table.blockSignals(False)
+            self.discount_input.setText("0")
+            self.amount_paid_input.setText("0.00")
 
     def open_search_dialog(self, row):
         dialog = MedicineSearchDialog(self.controller, self)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_medicine:
-            med = dialog.selected_medicine
-            
-            # Check for duplicates
-            for r in range(self.cart_table.rowCount()):
-                if r != row:
-                    id_item = self.cart_table.item(r, 0)
-                    if id_item and id_item.text() == str(med['id']):
-                        qty_item = self.cart_table.item(r, 4)
-                        current_qty = int(qty_item.text()) if qty_item.text() else 0
-                        qty_item.setText(str(current_qty + 1))
-                        
-                        self.clear_row(row)
-                        self.recalculate_row(r)
-                        self.cart_table.setCurrentCell(r, 4) # Focus qty of merged row
-                        return
-            
-            self.cart_table.blockSignals(True)
-            self.cart_table.setItem(row, 0, QTableWidgetItem(str(med['id'])))
-            self.cart_table.setItem(row, 1, QTableWidgetItem(med['name']))
-            
-            # Setup Unit ComboBox
-            unit_combo = QComboBox()
-            units = med.get('units', [])
-            for u in units:
-                unit_combo.addItem(u['name'], u)
-            
-            base_price = med['sale_price']
-            
-            # Store data in col 0 for easy access
-            self.cart_table.item(row, 0).setData(Qt.ItemDataRole.UserRole, med.get('is_discountable', 1))
-            self.cart_table.item(row, 0).setData(Qt.ItemDataRole.UserRole + 1, base_price)
-            
-            unit_combo.currentIndexChanged.connect(lambda: self.on_unit_changed(row))
-            self.cart_table.setCellWidget(row, 2, unit_combo)
-            
-            initial_price = base_price * units[0]['conversion'] if units else base_price
-            
-            self.cart_table.setItem(row, 3, QTableWidgetItem(f"{initial_price:.2f}"))
-            self.cart_table.setItem(row, 4, QTableWidgetItem("1"))
-            self.cart_table.setItem(row, 5, QTableWidgetItem(f"{initial_price:.2f}"))
-            
-            self.cart_table.blockSignals(False)
-            
-            self.recalculate_row(row)
-            self.ensure_empty_row()
-            
-            # Jump to Qty editing
-            self.cart_table.setCurrentCell(row, 4)
-            self.cart_table.editItem(self.cart_table.item(row, 4))
+            actual_row = self.cart_model.add_item(dialog.selected_medicine, row)
+            self.cart_model.ensure_empty_row()
+            self.cart_table.setCurrentIndex(self.cart_model.index(actual_row, 3))
+            self.cart_table.edit(self.cart_model.index(actual_row, 3))
 
-    def on_unit_changed(self, row):
-        id_item = self.cart_table.item(row, 0)
-        if not id_item: return
-        
-        combo = self.cart_table.cellWidget(row, 2)
-        if not combo: return
-        
-        unit_data = combo.currentData()
-        base_price = id_item.data(Qt.ItemDataRole.UserRole + 1)
-        
-        if unit_data and base_price:
-            new_price = base_price * unit_data['conversion']
-            self.cart_table.blockSignals(True)
-            self.cart_table.item(row, 3).setText(f"{new_price:.2f}")
-            self.cart_table.blockSignals(False)
-            
-        self.recalculate_row(row)
-
-    def on_item_changed(self, item):
-        if item.column() in [3, 4]: # Price or Qty
-            self.recalculate_row(item.row())
-
-    def recalculate_row(self, row):
-        self.cart_table.blockSignals(True)
-        try:
-            price_text = self.cart_table.item(row, 3).text()
-            qty_text = self.cart_table.item(row, 4).text()
-            
-            if not price_text or not qty_text:
-                self.cart_table.blockSignals(False)
-                return
-                
-            price = float(price_text)
-            qty = int(qty_text)
-            
-            id_item = self.cart_table.item(row, 0)
-            if id_item and id_item.text():
-                med_id = int(id_item.text())
-                
-                # Validation against base stock
-                combo = self.cart_table.cellWidget(row, 2)
-                conversion = combo.currentData()['conversion'] if combo and combo.currentData() else 1
-                total_base_qty_needed = qty * conversion
-                
-                stock = self.controller.get_stock_for_medicine(med_id)
-                if total_base_qty_needed > stock:
-                    max_allowed_qty = int(stock / conversion)
-                    QMessageBox.warning(self, "Out of Stock", f"Only {stock} base units available. Maximum allowed is {max_allowed_qty}.")
-                    qty = max_allowed_qty
-                    self.cart_table.item(row, 4).setText(str(qty))
-                    
-            total = price * qty
-            self.cart_table.item(row, 5).setText(f"{total:.2f}")
-            self.ensure_empty_row()
-        except (ValueError, TypeError):
-            pass
-        finally:
-            self.cart_table.blockSignals(False)
-            self.update_totals()
-
-    def update_totals(self):
-        subtotal = 0.0
-        discountable_subtotal = 0.0
-        for r in range(self.cart_table.rowCount()):
-            id_item = self.cart_table.item(r, 0)
-            if id_item and id_item.text():
-                try:
-                    price = float(self.cart_table.item(r, 3).text())
-                    qty = int(self.cart_table.item(r, 4).text())
-                    is_discountable = id_item.data(Qt.ItemDataRole.UserRole)
-                    
-                    row_tot = price * qty
-                    subtotal += row_tot
-                    if is_discountable:
-                        discountable_subtotal += row_tot
-                except (ValueError, AttributeError):
-                    pass
-                    
-        try:
-            discount_str = self.discount_input.text().strip()
-            discount_val = 0.0
-            
-            if discount_str:
-                if discount_str.endswith('%'):
-                    perc = float(discount_str.rstrip('%'))
-                    discount_val = discountable_subtotal * (perc / 100.0)
-                else:
-                    discount_val = float(discount_str)
-                    
-            if discount_val > discountable_subtotal:
-                discount_val = discountable_subtotal
-                
-            total = subtotal - discount_val
-            
-            self.subtotal_lbl.setText(f"{subtotal:.2f}")
-            self.total_lbl.setText(f"{total:.2f}")
-            if not self.amount_paid_input.isReadOnly():
-                self.amount_paid_input.setText(f"{total:.2f}")
-        except ValueError:
-            pass
+    def on_model_data_changed(self, top_left, bottom_right, roles=None):
+        self.update_totals()
 
     def focus_discount(self):
         self.discount_input.setFocus()
@@ -459,6 +421,13 @@ class POSView(QWidget):
     def focus_amount(self):
         self.amount_paid_input.setFocus()
         self.amount_paid_input.selectAll()
+
+    def focus_item_name(self):
+        if self.cart_model.rowCount() == 0:
+            self.cart_model.ensure_empty_row()
+        last_row = self.cart_model.rowCount() - 1
+        self.cart_table.setCurrentIndex(self.cart_model.index(last_row, 0))
+        self.cart_table.setFocus()
 
     def on_payment_method_changed(self, method):
         if method == "Credit (Khata)":
@@ -469,62 +438,57 @@ class POSView(QWidget):
             self.update_totals()
 
     def process_sale(self):
-        cart_items = []
-        for r in range(self.cart_table.rowCount()):
-            id_item = self.cart_table.item(r, 0)
-            if id_item and id_item.text():
-                try:
-                    med_id = int(id_item.text())
-                    name = self.cart_table.item(r, 1).text()
-                    qty = int(self.cart_table.item(r, 4).text())
-                    price = float(self.cart_table.item(r, 3).text())
-                    
-                    combo = self.cart_table.cellWidget(r, 2)
-                    unit_data = combo.currentData() if combo else None
-                    unit_id = unit_data['id'] if unit_data else None
-                    conversion_to_base = unit_data['conversion'] if unit_data else 1
-                    
-                    if qty > 0:
-                        cart_items.append({
-                            'medicine_id': med_id,
-                            'name': name,
-                            'quantity': qty,
-                            'price': price,
-                            'unit_id': unit_id,
-                            'conversion_to_base': conversion_to_base
-                        })
-                except (ValueError, TypeError):
-                    pass
-                    
+        cart_items = self.cart_model.get_cart_items()
         if not cart_items:
             QMessageBox.warning(self, "Empty Cart", "Please add items to cart before checkout.")
             return
-            
+
         try:
             discount = float(self.discount_input.text() or 0)
             amount_paid = float(self.amount_paid_input.text() or 0)
         except ValueError:
             QMessageBox.warning(self, "Invalid Input", "Discount and Amount Paid must be numbers.")
             return
-            
+
         payment_method = self.payment_method.currentText()
         customer_id = self.customer_dropdown.currentData()
 
         if payment_method == "Credit (Khata)" and not customer_id:
             QMessageBox.warning(self, "Customer Required", "Please select a customer for Credit (Khata) sales.")
             return
-        
+
         success, msg = self.controller.process_sale(cart_items, discount, payment_method, customer_id, amount_paid)
         if success:
             QMessageBox.information(self, "Success", msg)
-            self.cart_table.blockSignals(True)
-            self.cart_table.setRowCount(0)
-            self.ensure_empty_row()
-            self.cart_table.blockSignals(False)
-            
+            self.cart_model.clear()
             self.customer_dropdown.setCurrentIndex(0)
             self.discount_input.setText("0")
             self.amount_paid_input.setText("0.00")
             self.update_totals()
         else:
             QMessageBox.warning(self, "Error", msg)
+
+    def update_totals(self):
+        subtotal = 0.0
+        for item in self.cart_model.get_cart_items():
+            subtotal += item['price'] * item['quantity']
+
+        discount_val = 0.0
+        discount_str = self.discount_input.text().strip()
+        try:
+            if discount_str:
+                if discount_str.endswith('%'):
+                    perc = float(discount_str.rstrip('%'))
+                    discount_val = subtotal * (perc / 100.0)
+                else:
+                    discount_val = float(discount_str)
+            if discount_val > subtotal:
+                discount_val = subtotal
+        except ValueError:
+            discount_val = 0.0
+
+        total = subtotal - discount_val
+        self.subtotal_lbl.setText(f"{subtotal:.2f}")
+        self.total_lbl.setText(f"{total:.2f}")
+        if not self.amount_paid_input.isReadOnly():
+            self.amount_paid_input.setText(f"{total:.2f}")

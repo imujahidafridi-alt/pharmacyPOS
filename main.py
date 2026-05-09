@@ -1,6 +1,7 @@
 import sys
 from PyQt6.QtWidgets import QApplication
 from core.database import init_db
+from core.logging import configure_logging
 from core.theme import GLOBAL_STYLE
 from controllers.auth_controller import AuthController
 from views.login_view import LoginView
@@ -27,7 +28,8 @@ class AppController:
         self.main_window.show()
 
     def run(self):
-        print("Starting Pharmacy POS System...")
+        logger = configure_logging()
+        logger.info("Starting Pharmacy POS System...")
         init_db()
         self.show_login()
         sys.exit(self.app.exec())
